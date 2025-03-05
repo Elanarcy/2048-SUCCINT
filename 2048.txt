@@ -1,0 +1,449 @@
+class Game2048 {
+    constructor() {
+        this.board = this.initializeBoard();
+        this.score = 0;
+        this.gameOver = false;
+        this.gameWon = false;
+        this.addRandomTile();
+        this.addRandomTile();
+    }
+
+    initializeBoard() {
+        return [
+            [null, null, null, null],
+            [null, null, null, null],
+            [null, null, null, null],
+            [null, null, null, null]
+        ];
+    }
+
+    addRandomTile() {
+        const emptyCells = [];
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+                if (!this.board[i][j]) emptyCells.push({ i, j });
+            }
+        }
+        if (emptyCells.length === 0) return false;
+        const { i, j } = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+        this.board[i][j] = Math.random() < 0.9 ? 2 : 4;
+        this.checkWin();
+        return true;
+    }
+
+    copyBoard() {
+        return this.board.map(row => [...row]);
+    }
+
+    moveLine(line) {
+        let newLine = Array(4).fill(null);
+        let score = 0;
+        let pos = 0;
+        let moved = false;
+
+        for (let i = 0; i < 4; i++) {
+            if (line[i]) {
+                if (pos > 0 && newLine[pos - 1] === line[i]) {
+                    newLine[pos - 1] *= 2;
+                    score += newLine[pos - 1];
+                    moved = true;
+                } else {
+                    newLine[pos] = line[i];
+                    if (pos !== i) moved = true;
+                    pos++;
+                }
+            }
+        }
+        return { line: newLine, score, moved };
+    }
+
+    move(direction) {
+        let moved = false;
+        const newBoard = this.copyBoard();
+        let moveScore = 0;
+
+        if (direction === 'left') {
+            for (let i = 0; i < 4; i++) {
+                const { line, score, moved: lineMoved } = this.moveLine(newBoard[i]);
+                newBoard[i] = line;
+                moveScore += score;
+                moved = moved || lineMoved;
+            }
+        } else if (direction === 'right') {
+            for (let i = 0; i < 4; i++) {
+                const { line, score, moved: lineMoved } = this.moveLine(newBoard[i].reverse());
+                newBoard[i] = line.reverse();
+                moveScore += score;
+                moved = moved || lineMoved;
+            }
+        } else if (direction === 'up') {
+            for (let j = 0; j < 4; j++) {
+                const column = newBoard.map(row => row[j]);
+                const { line, score, moved: lineMoved } = this.moveLine(column);
+                for (let i = 0; i < 4; i++) newBoard[i][j] = line[i];
+                moveScore += score;
+                moved = moved || lineMoved;
+            }
+        } else if (direction === 'down') {
+            for (let j = 0; j < 4; j++) {
+                const column = newBoard.map(row => row[j]).reverse();
+                const { line, score, moved: lineMoved } = this.moveLine(column);
+                for (let i = 0; i < 4; i++) newBoard[i][j] = line[3 - i];
+                moveScore += score;
+                moved = moved || lineMoved;
+            }
+        }
+
+        if (moved) {
+            this.board = newBoard;
+            this.score += moveScore;
+            this.addRandomTile();
+            this.checkGameOver();
+            this.checkWin();
+        }
+        return moved;
+    }
+
+    checkGameOver() {
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+                if (!this.board[i][j]) return;
+                if (j < 3 && this.board[i][j] === this.board[i][j + 1]) return;
+                if (i < 3 && this.board[i][j] === this.board[i + 1][j]) return;
+            }
+        }
+        this.gameOver = true;
+    }
+
+    checkWin() {
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+                if (this.board[i][j] === 2048) {
+                    this.gameWon = true;
+                    return;
+                }
+            }
+        }
+    }
+
+    printBoard() {
+        let maxTile = 0;
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+                if (this.board[i][j]) maxTile = Math.max(maxTile, this.board[i][j]);
+            }
+        }
+        console.log(`Score: ${this.score}, Max Tile: ${maxTile}`);
+        console.log(this.gameWon ? 'You Win! Reached 2048!' : '');
+        this.board.forEach(row => {
+            console.log(row.map(cell => (cell || ' ').toString().padStart(5)).join(''));
+        });
+        console.log('\n');
+    }
+}
+
+class AutoPlayer {
+    constructor(game) {
+        this.game = game;
+        this.directions = ['right', 'down', 'up', 'left'];
+        this.simulationsPerMove = 100; // Number of MCTS rollouts
+    }
+
+    evaluateBoard(board) {
+        let score = 0;
+
+        let maxTile = 0;
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+                if (board[i][j]) {
+                    if (!Number.isInteger(Math.log2(board[i][j]))) {
+                        console.warn(`Invalid tile value: ${board[i][j]} at [${i},${j}]`);
+                        return -Infinity;
+                    }
+                    maxTile = Math.max(maxTile, board[i][j]);
+                }
+            }
+        }
+
+        const cornerValue = board[3][3] || 0;
+        const cornerBonus = (cornerValue === maxTile && maxTile >= 64) ? maxTile * 100000 : -1000;
+
+        let emptyCells = 0;
+        board.forEach(row => row.forEach(cell => {
+            if (!cell) emptyCells++;
+        }));
+
+        let mergeScore = 0;
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 3; j++) {
+                if (board[i][j] && board[i][j] === board[i][j + 1]) mergeScore += board[i][j] * 2;
+            }
+            for (let j = 0; j < 3; j++) {
+                if (board[j][i] && board[j][i] === board[j + 1][i]) mergeScore += board[j][i] * 2;
+            }
+        }
+
+        let monotonicity = 0;
+        for (let i = 0; i < 3; i++) {
+            for (let j = 0; j < 3; j++) {
+                const curr = board[i][j] || 0;
+                const right = board[i][j + 1] || 0;
+                const down = board[i + 1][j] || 0;
+                if (curr <= right) monotonicity += right - curr;
+                if (curr <= down) monotonicity += down - curr;
+            }
+        }
+
+        score = (maxTile * 50000) +      // Extreme max tile focus
+                (cornerBonus) +          // Lock corner
+                (emptyCells * 500) +     // Minimal space weight
+                (monotonicity * 3000) +  // Strong ordering
+                (mergeScore * 50000);    // Extreme merge focus
+
+        return score;
+    }
+
+    simulateMove(board, direction) {
+        const tempGame = new Game2048();
+        tempGame.board = board.map(row => [...row]);
+        const moved = tempGame.move(direction);
+        return { board: tempGame.board, moved, score: tempGame.score };
+    }
+
+    simulateRandomGame(board) {
+        let currentBoard = board.map(row => [...row]);
+        let totalScore = 0;
+        const tempGame = new Game2048();
+        tempGame.board = currentBoard;
+
+        while (true) {
+            const possibleMoves = [];
+            for (const direction of this.directions) {
+                const { moved } = this.simulateMove(currentBoard, direction);
+                if (moved) possibleMoves.push(direction);
+            }
+            if (possibleMoves.length === 0) break;
+
+            const direction = possibleMoves[Math.floor(Math.random() * possibleMoves.length)];
+            const { board, score } = this.simulateMove(currentBoard, direction);
+            currentBoard = board;
+            totalScore += score;
+        }
+
+        let maxTile = 0;
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+                if (currentBoard[i][j]) maxTile = Math.max(maxTile, currentBoard[i][j]);
+            }
+        }
+        return totalScore + maxTile * 1000; // Reward reaching high tiles
+    }
+
+    mcts(rootBoard) {
+        const stats = {};
+        for (const direction of this.directions) {
+            stats[direction] = { visits: 0, totalScore: 0 };
+        }
+
+        for (let i = 0; i < this.simulationsPerMove; i++) {
+            for (const direction of this.directions) {
+                const { board: newBoard, moved } = this.simulateMove(rootBoard, direction);
+                if (moved) {
+                    const score = this.simulateRandomGame(newBoard);
+                    stats[direction].visits += 1;
+                    stats[direction].totalScore += score;
+                }
+            }
+        }
+
+        let bestMove = null;
+        let bestValue = -Infinity;
+        const moveScores = {};
+        for (const direction of this.directions) {
+            if (stats[direction].visits > 0) {
+                const avgScore = stats[direction].totalScore / stats[direction].visits;
+                moveScores[direction] = avgScore;
+                if (avgScore > bestValue) {
+                    bestValue = avgScore;
+                    bestMove = direction;
+                }
+            }
+        }
+
+        console.log('Move Scores:', moveScores);
+        console.log('Chosen Move:', bestMove || 'No valid moves');
+        return bestMove;
+    }
+
+    getBestMove() {
+        return this.mcts(this.game.board);
+    }
+}
+
+function getCurrentBoard() {
+    const tiles = document.querySelectorAll('#game-container div[class*="bg-2048-"]');
+    const board = Array(4).fill().map(() => Array(4).fill(null));
+    let tileCount = 0;
+
+    tiles.forEach(tile => {
+        const text = tile.textContent.trim();
+        const value = parseInt(text);
+        if (isNaN(value) || value < 2 || !Number.isInteger(Math.log2(value))) {
+            console.warn(`Invalid tile text: "${text}" at position ${tile.style.top},${tile.style.left}`);
+            return;
+        }
+        const style = window.getComputedStyle(tile);
+        const top = parseFloat(style.top);
+        const left = parseFloat(style.left);
+        
+        const row = Math.floor(top / 108);
+        const col = Math.floor(left / 108);
+
+        if (row >= 0 && row < 4 && col >= 0 && col < 4) {
+            if (board[row][col] !== null) {
+                console.warn(`Duplicate tile at [${row},${col}]: existing=${board[row][col]}, new=${value}`);
+            }
+            board[row][col] = value;
+            tileCount++;
+        } else {
+            console.warn(`Tile out of bounds: row=${row}, col=${col}, value=${value}`);
+        }
+    });
+
+    console.log(`Tiles detected: ${tileCount}`);
+    console.log('Read Board:');
+    board.forEach(row => console.log(row.map(cell => (cell || ' ').toString().padStart(5)).join('')));
+    return board;
+}
+
+function pressKey(direction) {
+    const keyMap = {
+        up: 'ArrowUp',
+        right: 'ArrowRight',
+        down: 'ArrowDown',
+        left: 'ArrowLeft'
+    };
+
+    console.log(`Pressing: ${direction}`);
+    const event = new KeyboardEvent('keydown', {
+        key: keyMap[direction],
+        code: `Arrow${direction.charAt(0).toUpperCase() + direction.slice(1)}`,
+        bubbles: true
+    });
+    document.dispatchEvent(event);
+}
+
+async function autoPlay() {
+    const game = new Game2048();
+    const player = new AutoPlayer(game);
+
+    console.log('Autoplay started with MCTS...');
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    while (true) {
+        const board = getCurrentBoard();
+        game.board = board;
+        const scoreElement = document.querySelector('.bg-succinct-pink\\/20 .text-xl.font-bold');
+        game.score = scoreElement ? parseInt(scoreElement.textContent) || 0 : 0;
+
+        let hasMoves = false;
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+                if (!board[i][j]) hasMoves = true;
+                else if (j < 3 && board[i][j] === board[i][j + 1]) hasMoves = true;
+                else if (i < 3 && board[i][j] === board[i + 1][j]) hasMoves = true;
+            }
+        }
+
+        if (!hasMoves) {
+            console.log(`Game Over! Final Score: ${game.score}`);
+            console.log('Final Board:');
+            let maxTile = 0;
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    if (board[i][j]) maxTile = Math.max(maxTile, board[i][j]);
+                }
+            }
+            console.log(`Max Tile Achieved: ${maxTile}`);
+            board.forEach(row => {
+                console.log(row.map(cell => (cell || ' ').toString().padStart(5)).join(''));
+            });
+            break;
+        }
+        if (game.gameWon) {
+            console.log(`You Win! Final Score: ${game.score}`);
+            console.log('Winning Board:');
+            let maxTile = 0;
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    if (board[i][j]) maxTile = Math.max(maxTile, board[i][j]);
+                }
+            }
+            console.log(`Max Tile Achieved: ${maxTile}`);
+            board.forEach(row => {
+                console.log(row.map(cell => (cell || ' ').toString().padStart(5)).join(''));
+            });
+            break;
+        }
+
+        let move = player.getBestMove();
+        if (!move) {
+            console.log('No move found, retrying with delay...');
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const recheckBoard = getCurrentBoard();
+            game.board = recheckBoard;
+            move = player.getBestMove();
+            if (!move) {
+                console.log('Still no move, forcing a valid direction...');
+                for (const direction of player.directions) {
+                    const tempBoard = recheckBoard.map(row => [...row]);
+                    pressKey(direction);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const newBoard = getCurrentBoard();
+                    if (JSON.stringify(tempBoard) !== JSON.stringify(newBoard)) {
+                        move = direction;
+                        game.board = newBoard;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (move) {
+            pressKey(move);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            const newBoard = getCurrentBoard();
+            game.board = newBoard;
+            game.printBoard();
+        } else {
+            console.log('No valid moves available after retry and force check');
+            console.log('Final Board:');
+            let maxTile = 0;
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    if (board[i][j]) maxTile = Math.max(maxTile, board[i][j]);
+                }
+            }
+            console.log(`Max Tile Achieved: ${maxTile}`);
+            board.forEach(row => {
+                console.log(row.map(cell => (cell || ' ').toString().padStart(5)).join(''));
+            });
+            console.log('Stopping Reason: No moves possible');
+            break;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 200));
+    }
+}
+
+// Start autoplay on right arrow key press
+let isAutoPlaying = false;
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowRight' && !isAutoPlaying) {
+        isAutoPlaying = true;
+        console.log('Right arrow pressed, starting MCTS autoplay...');
+        autoPlay();
+    }
+});
+
+console.log('Press the right arrow key to start the MCTS bot!');
